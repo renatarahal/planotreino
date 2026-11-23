@@ -5,6 +5,11 @@
 //
 // Blocos com a mesma escrita, ignorando maiúsculas e espaços, contam como um só
 // e passam a usar a escrita da primeira vez em que aparecem.
+// Nomes dos blocos já usados, sem repetir, para sugerir ao digitar.
+export function nomesDosBlocos(exercicios) {
+  return [...new Set(exercicios.map((e) => e.bloco?.trim()).filter(Boolean))]
+}
+
 export function agruparPorBloco(exercicios) {
   const grupos = new Map()
   for (const ex of exercicios) {

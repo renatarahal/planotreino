@@ -51,6 +51,17 @@ export const demo = {
   excluirTreino(treinoId) {
     gravarTreinos(lerTreinos().filter((t) => t.id !== treinoId))
   },
+  salvarExercicios(treinoId, exercicios) {
+    const treinos = lerTreinos()
+    const treino = treinos.find((t) => t.id === treinoId)
+    if (treino) treino.exercicios = JSON.parse(JSON.stringify(exercicios))
+    gravarTreinos(treinos)
+  },
+  excluirExercicio(exercicioId) {
+    const treinos = lerTreinos()
+    for (const t of treinos) t.exercicios = t.exercicios.filter((ex) => ex.id !== exercicioId)
+    gravarTreinos(treinos)
+  },
   marcarExercicio(exercicioId, feito) {
     const treinos = lerTreinos()
     for (const t of treinos) for (const ex of t.exercicios) if (ex.id === exercicioId) ex.feito = feito

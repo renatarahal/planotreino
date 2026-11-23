@@ -1,8 +1,9 @@
 <script setup>
 import { computed, ref, toRaw } from 'vue'
-import { CAMPOS_EXERCICIO } from '../api/treinos'
-import { novoId } from '../lib/uuid'
-import { agruparPorBloco } from '../lib/blocos'
+import ExercicioCampos from './ExercicioCampos.vue'
+import SugestoesExercicio from './SugestoesExercicio.vue'
+import { agruparPorBloco, nomesDosBlocos } from '../lib/blocos'
+import { exercicioVazio, limparExercicio, validarExercicio } from '../lib/exercicio'
 
 const props = defineProps({
   treino: { type: Object, required: true },
@@ -11,40 +12,15 @@ const props = defineProps({
 })
 const emit = defineEmits(['salvar', 'cancelar', 'excluir'])
 
-const GRUPOS = ['Peito', 'Costas', 'Ombros', 'Bíceps', 'Tríceps', 'Antebraço', 'Abdômen', 'Lombar',
-  'Quadríceps', 'Posterior de coxa', 'Glúteos', 'Panturrilha', 'Corpo inteiro', 'Cardio', 'Mobilidade']
-const EQUIPAMENTOS = ['Halteres', 'Barra', 'Anilha', 'Kettlebell', 'Elástico', 'Banco', 'Peso corporal',
-  'Bola suíça', 'Corda', 'Step', 'Colchonete', 'Barra fixa', 'Caneleira', 'Bicicleta', 'Esteira']
-const METODOS = ['Normal', 'Bi-set', 'Tri-set', 'Drop-set', 'Pirâmide', 'Rest-pause', 'Circuito',
-  'Isometria', 'Super-série', 'AMRAP', 'EMOM']
-
 const form = ref(structuredClone(toRaw(props.treino)))
 const erro = ref('')
 
 // Blocos já usados neste treino, para sugerir ao digitar.
-const blocos = computed(() => [...new Set(form.value.exercicios.map((e) => e.bloco?.trim()).filter(Boolean))])
-
-function exercicioVazio() {
-  return {
-    id: novoId(),
-    // Novo exercício entra no mesmo bloco do último, que é o caso mais comum.
-    bloco: form.value.exercicios.at(-1)?.bloco ?? '',
-    nome: '',
-    grupo_muscular: '',
-    equipamento: '',
-    series: 3,
-    repeticoes: '12',
-    carga: '',
-    descanso_segundos: 60,
-    metodo: '',
-    observacoes: '',
-    video_url: '',
-    feito: false,
-  }
-}
+const blocos = computed(() => nomesDosBlocos(form.value.exercicios))
 
 function adicionarExercicio() {
-  form.value.exercicios.push(exercicioVazio())
+  // Novo exercício entra no mesmo bloco do último, que é o caso mais comum.
+  form.value.exercicios.push(exercicioVazio(form.value.exercicios.at(-1)?.bloco ?? ''))
 }
 
 function mover(i, direcao) {
@@ -58,39 +34,28 @@ function remover(i) {
   form.value.exercicios.splice(i, 1)
 }
 
-// Texto vazio vira null; números vazios também.
-function limpar(valor) {
-  if (typeof valor === 'string') return valor.trim() || null
-  return valor === '' || Number.isNaN(valor) ? null : valor
+function textoOuNulo(valor) {
+  return valor?.trim() || null
 }
 
 function salvar() {
   erro.value = ''
   const t = form.value
+  // Valida na ordem em que a pessoa vê a lista, antes de reagrupar.
+  const limpos = t.exercicios.map(limparExercicio)
+  for (const [i, ex] of limpos.entries()) {
+    const problema = validarExercicio(ex)
+    if (problema) return (erro.value = `Exercício ${i + 1}: ${problema}`)
+  }
+
   const treino = {
     ...t,
     nome: t.nome.trim(),
-    foco: limpar(t.foco),
-    observacoes: limpar(t.observacoes),
-    exercicios: agruparPorBloco(
-      t.exercicios.map((ex) => ({
-        id: ex.id,
-        feito: ex.feito,
-        ...Object.fromEntries(CAMPOS_EXERCICIO.map((c) => [c, limpar(ex[c])])),
-      })),
-    ),
+    foco: textoOuNulo(t.foco),
+    observacoes: textoOuNulo(t.observacoes),
+    exercicios: agruparPorBloco(limpos),
   }
-
   if (!treino.nome) return (erro.value = 'Dê um nome ao treino (ex.: Treino A).')
-  for (const [i, ex] of treino.exercicios.entries()) {
-    const n = `Exercício ${i + 1}`
-    if (!ex.nome) return (erro.value = `${n}: falta o nome.`)
-    if (ex.series != null && (ex.series < 1 || ex.series > 50)) return (erro.value = `${n}: séries entre 1 e 50.`)
-    if (ex.descanso_segundos != null && (ex.descanso_segundos < 0 || ex.descanso_segundos > 3600))
-      return (erro.value = `${n}: descanso entre 0 e 3600 segundos.`)
-    if (ex.video_url && !/^https?:\/\//i.test(ex.video_url))
-      return (erro.value = `${n}: o link do vídeo precisa começar com http:// ou https://`)
-  }
   emit('salvar', treino)
 }
 
@@ -131,38 +96,7 @@ function excluir() {
           </div>
         </div>
 
-        <div class="grade">
-          <label class="largo">Bloco / seção
-            <input v-model="ex.bloco" list="blocos" maxlength="60" placeholder="Aquecimento, Treino principal, Core..." />
-          </label>
-          <label>Séries
-            <input v-model.number="ex.series" type="number" min="1" max="50" />
-          </label>
-          <label>Repetições
-            <input v-model="ex.repeticoes" maxlength="30" placeholder="12, 10-12, 30s" />
-          </label>
-          <label>Carga
-            <input v-model="ex.carga" maxlength="30" placeholder="10 kg, elástico forte" />
-          </label>
-          <label>Descanso (segundos)
-            <input v-model.number="ex.descanso_segundos" type="number" min="0" max="3600" step="5" />
-          </label>
-          <label>Grupo muscular
-            <input v-model="ex.grupo_muscular" list="grupos" maxlength="40" />
-          </label>
-          <label>Equipamento
-            <input v-model="ex.equipamento" list="equipamentos" maxlength="40" />
-          </label>
-          <label>Método
-            <input v-model="ex.metodo" list="metodos" maxlength="40" placeholder="Normal" />
-          </label>
-          <label>Vídeo (link)
-            <input v-model="ex.video_url" type="url" maxlength="500" placeholder="https://youtube.com/..." />
-          </label>
-          <label class="largo">Observações
-            <input v-model="ex.observacoes" maxlength="500" placeholder="Desça devagar, cotovelo fixo..." />
-          </label>
-        </div>
+        <ExercicioCampos v-model="form.exercicios[i]" />
       </li>
     </ol>
 
@@ -178,10 +112,7 @@ function excluir() {
       <button type="submit" :disabled="salvando">{{ salvando ? 'Salvando...' : 'Salvar treino' }}</button>
     </div>
 
-    <datalist id="blocos"><option v-for="b in blocos" :key="b" :value="b" /></datalist>
-    <datalist id="grupos"><option v-for="g in GRUPOS" :key="g" :value="g" /></datalist>
-    <datalist id="equipamentos"><option v-for="e in EQUIPAMENTOS" :key="e" :value="e" /></datalist>
-    <datalist id="metodos"><option v-for="m in METODOS" :key="m" :value="m" /></datalist>
+    <SugestoesExercicio :blocos="blocos" />
   </form>
 </template>
 

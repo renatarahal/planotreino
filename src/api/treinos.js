@@ -1,19 +1,6 @@
 import { supabase } from '../lib/supabase'
 import { MODO_DEMO, demo } from '../lib/demo'
-
-export const CAMPOS_EXERCICIO = [
-  'bloco',
-  'nome',
-  'grupo_muscular',
-  'equipamento',
-  'series',
-  'repeticoes',
-  'carga',
-  'descanso_segundos',
-  'metodo',
-  'observacoes',
-  'video_url',
-]
+import { CAMPOS_EXERCICIO } from '../lib/exercicio'
 
 function checar({ data, error }) {
   if (error) throw error
@@ -57,19 +44,38 @@ export async function salvarTreino(perfilId, treino) {
     }),
   )
 
-  const exercicios = treino.exercicios.map((ex, i) => ({
-    id: ex.id,
-    treino_id: treino.id,
-    ordem: i,
-    feito: ex.feito ?? false,
-    ...Object.fromEntries(CAMPOS_EXERCICIO.map((c) => [c, ex[c]])),
-  }))
+  const exercicios = linhasExercicios(treino.id, treino.exercicios)
 
   let remover = supabase.from('exercicios').delete().eq('treino_id', treino.id)
   if (exercicios.length) remover = remover.not('id', 'in', `(${exercicios.map((e) => e.id).join(',')})`)
   checar(await remover)
 
   if (exercicios.length) checar(await supabase.from('exercicios').upsert(exercicios))
+}
+
+// A posição na lista vira a "ordem". Manda a linha completa porque o upsert
+// do Postgres confere os campos obrigatórios (como o nome) mesmo ao atualizar.
+function linhasExercicios(treinoId, exercicios) {
+  return exercicios.map((ex, i) => ({
+    id: ex.id,
+    treino_id: treinoId,
+    ordem: i,
+    feito: ex.feito ?? false,
+    ...Object.fromEntries(CAMPOS_EXERCICIO.map((c) => [c, ex[c] ?? null])),
+  }))
+}
+
+// Salva a lista de exercícios de um treino na ordem recebida, sem mexer no
+// treino em si. Usado ao arrastar um card e ao editar um exercício só.
+export async function salvarExercicios(treinoId, exercicios) {
+  if (MODO_DEMO) return demo.salvarExercicios(treinoId, exercicios)
+  if (exercicios.length)
+    checar(await supabase.from('exercicios').upsert(linhasExercicios(treinoId, exercicios)))
+}
+
+export async function excluirExercicio(exercicioId) {
+  if (MODO_DEMO) return demo.excluirExercicio(exercicioId)
+  checar(await supabase.from('exercicios').delete().eq('id', exercicioId))
 }
 
 export async function excluirTreino(treinoId) {

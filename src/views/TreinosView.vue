@@ -1,9 +1,15 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { VueDraggable } from 'vue-draggable-plus'
+import ExercicioCampos from '../components/ExercicioCampos.vue'
+import SugestoesExercicio from '../components/SugestoesExercicio.vue'
 import TreinoEditor from '../components/TreinoEditor.vue'
-import { agruparPorBloco } from '../lib/blocos'
+import { agruparPorBloco, nomesDosBlocos } from '../lib/blocos'
+import { limparExercicio, validarExercicio } from '../lib/exercicio'
 import {
+  excluirExercicio,
   excluirTreino,
+  salvarExercicios,
   finalizarTreino,
   listarTreinos,
   marcarExercicio,
@@ -186,6 +192,114 @@ async function excluir() {
   await carregar()
 }
 
+// ---------------------------------------------------------------------------
+// Lista agrupada por bloco, com arrastar e editar um exercício só
+// ---------------------------------------------------------------------------
+// Cada bloco é uma lista própria. Arrastar um card para outro bloco faz o
+// exercício passar a ser daquele bloco.
+const grupos = ref([]) // [{ chave, nome, itens: [exercício] }]
+const editandoEx = ref(null) // cópia do exercício em edição
+const erroEx = ref('')
+const salvandoEx = ref(false)
+
+const normalizar = (bloco) => (bloco ?? '').trim().toLowerCase()
+
+function montarGrupos() {
+  const lista = []
+  for (const ex of treinoAba.value?.exercicios ?? []) {
+    const ultimo = lista.at(-1)
+    if (ultimo && normalizar(ultimo.nome) === normalizar(ex.bloco)) ultimo.itens.push(ex)
+    else lista.push({ chave: normalizar(ex.bloco) || '__sem-bloco__', nome: ex.bloco || null, itens: [ex] })
+  }
+  grupos.value = lista
+}
+
+watch(
+  treinoAba,
+  () => {
+    editandoEx.value = null
+    montarGrupos()
+  },
+  { immediate: true },
+)
+
+const assinatura = (lista) => lista.map((ex) => `${ex.id}:${ex.bloco ?? ''}`).join('|')
+
+async function aoSoltar() {
+  await nextTick() // espera a biblioteca atualizar as listas
+  const treino = treinoAba.value
+  const antes = assinatura(treino.exercicios)
+  const lista = grupos.value.flatMap((g) =>
+    g.itens.map((ex) => {
+      ex.bloco = g.nome
+      return ex
+    }),
+  )
+  if (assinatura(lista) === antes) return // soltou no mesmo lugar
+  treino.exercicios = lista
+  montarGrupos() // some com blocos que ficaram vazios
+  try {
+    await salvarExercicios(treino.id, lista)
+  } catch {
+    erro.value = 'Não foi possível salvar a nova ordem. O treino foi recarregado.'
+    await carregar()
+  }
+}
+
+function editarExercicio(ex) {
+  erroEx.value = ''
+  editandoEx.value = JSON.parse(JSON.stringify(ex))
+}
+
+// Se o bloco mudou, o exercício vai para o fim do novo bloco.
+function posicionar(exercicios, editado) {
+  const original = exercicios.find((ex) => ex.id === editado.id)
+  if (normalizar(original?.bloco) === normalizar(editado.bloco))
+    return exercicios.map((ex) => (ex.id === editado.id ? editado : ex))
+
+  const outros = exercicios.filter((ex) => ex.id !== editado.id)
+  const ultimoDoBloco = outros.findLastIndex((ex) => normalizar(ex.bloco) === normalizar(editado.bloco))
+  const posicao = ultimoDoBloco === -1 ? outros.length : ultimoDoBloco + 1
+  return [...outros.slice(0, posicao), editado, ...outros.slice(posicao)]
+}
+
+async function salvarExercicio() {
+  erroEx.value = ''
+  const editado = limparExercicio(editandoEx.value)
+  const problema = validarExercicio(editado)
+  if (problema) return (erroEx.value = `Confira: ${problema}`)
+
+  const treino = treinoAba.value
+  const lista = agruparPorBloco(posicionar(treino.exercicios, editado))
+  salvandoEx.value = true
+  try {
+    await salvarExercicios(treino.id, lista)
+  } catch {
+    erroEx.value = 'Não foi possível salvar o exercício.'
+    return
+  } finally {
+    salvandoEx.value = false
+  }
+  treino.exercicios = lista
+  editandoEx.value = null
+  montarGrupos()
+}
+
+async function removerExercicio() {
+  const ex = editandoEx.value
+  if (!confirm(`Remover "${ex.nome || 'este exercício'}" do treino?`)) return
+  const treino = treinoAba.value
+  try {
+    await excluirExercicio(ex.id)
+  } catch {
+    erroEx.value = 'Não foi possível remover o exercício.'
+    return
+  }
+  treino.exercicios = treino.exercicios.filter((e) => e.id !== ex.id)
+  editandoEx.value = null
+  montarGrupos()
+}
+
 function formatarDescanso(seg) {
   if (seg == null) return null
   if (seg < 60) return `${seg}s`
@@ -278,12 +392,40 @@ onUnmounted(() => clearInterval(relogio))
 
           <p v-if="!total" class="vazio-texto">Sem exercícios. Clique em Editar para adicionar.</p>
 
-          <ul class="lista">
-            <template v-for="(ex, i) in treinoAba.exercicios" :key="ex.id">
-            <li v-if="ex.bloco && ex.bloco !== treinoAba.exercicios[i - 1]?.bloco" class="bloco">{{ ex.bloco }}</li>
-            <li class="item" :class="{ feito: ex.feito }">
+          <p v-if="total > 1" class="dica">Arraste pelo ⠿ para mudar a ordem, ou para outro bloco.</p>
+
+          <div class="lista">
+            <section v-for="g in grupos" :key="g.chave" class="grupo">
+            <h3 v-if="g.nome" class="bloco">{{ g.nome }}</h3>
+            <VueDraggable
+              v-model="g.itens"
+              tag="ul"
+              class="itens"
+              handle=".alca"
+              :group="`exercicios-${treinoAba.id}`"
+              :animation="180"
+              :disabled="!!editandoEx"
+              ghostClass="fantasma"
+              chosenClass="escolhido"
+              @end="aoSoltar"
+            >
+            <li v-for="ex in g.itens" :key="ex.id" class="item" :class="{ feito: ex.feito && editandoEx?.id !== ex.id, editando: editandoEx?.id === ex.id }">
+              <form v-if="editandoEx?.id === ex.id" class="edicao" @submit.prevent="salvarExercicio">
+                <input v-model="editandoEx.nome" class="nome-edicao" maxlength="80" placeholder="Nome do exercício *" required aria-label="Nome do exercício" />
+                <ExercicioCampos v-model="editandoEx" />
+                <p v-if="erroEx" class="erro">{{ erroEx }}</p>
+                <div class="acoes-edicao">
+                  <button type="button" class="secundario perigo" @click="removerExercicio">Remover</button>
+                  <span class="espaco" />
+                  <button type="button" class="secundario" @click="editandoEx = null">Cancelar</button>
+                  <button type="submit" :disabled="salvandoEx">{{ salvandoEx ? 'Salvando...' : 'Salvar' }}</button>
+                </div>
+              </form>
+
+              <template v-else>
+              <span v-if="total > 1" class="alca" title="Arraste para mudar a ordem" aria-hidden="true">⠿</span>
               <label class="check">
-                <input type="checkbox" :checked="ex.feito" @change="alternar(ex)" />
+                <input type="checkbox" :checked="ex.feito" :aria-label="`Feito: ${ex.nome}`" @change="alternar(ex)" />
                 <span class="caixa" aria-hidden="true">✓</span>
               </label>
               <div class="info">
@@ -301,9 +443,14 @@ onUnmounted(() => clearInterval(relogio))
                 <p v-if="ex.observacoes" class="obs">{{ ex.observacoes }}</p>
                 <a v-if="linkSeguro(ex.video_url)" :href="linkSeguro(ex.video_url)" target="_blank" rel="noopener noreferrer" class="video">▶ Ver vídeo</a>
               </div>
+              <button class="editar-ex" :disabled="!!editandoEx" :aria-label="`Editar ${ex.nome}`" @click="editarExercicio(ex)">✏️</button>
+              </template>
             </li>
-            </template>
-          </ul>
+            </VueDraggable>
+            </section>
+          </div>
+
+          <SugestoesExercicio :blocos="nomesDosBlocos(treinoAba.exercicios)" />
 
           <button v-if="total" class="finalizar" @click="finalizar">Finalizar treino</button>
         </section>
@@ -500,15 +647,26 @@ onUnmounted(() => clearInterval(relogio))
   color: var(--texto-suave);
 }
 .lista {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+.grupo {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.itens {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 24px; /* deixa soltar mesmo se a lista ficar quase vazia */
 }
 .bloco {
-  margin-top: 12px;
+  margin: 0;
   padding-bottom: 6px;
   border-bottom: 1px solid var(--borda);
   font-weight: 800;
@@ -517,8 +675,75 @@ onUnmounted(() => clearInterval(relogio))
   letter-spacing: 0.06em;
   color: var(--verde);
 }
-.bloco:first-child {
-  margin-top: 0;
+.dica {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--texto-suave);
+}
+.alca {
+  flex: none;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  margin: -14px 0 -14px -10px;
+  font-size: 1.3rem;
+  color: var(--texto-suave);
+  cursor: grab;
+  touch-action: none; /* no celular, arrastar pela alça não rola a página */
+  user-select: none;
+}
+.alca:active {
+  cursor: grabbing;
+  color: var(--verde);
+}
+.editar-ex {
+  flex: none;
+  align-self: flex-start;
+  width: 40px;
+  height: 40px;
+  margin: -6px -8px 0 auto;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  font-size: 1rem;
+}
+@media (hover: hover) {
+  .editar-ex:hover:not(:disabled) {
+    border-color: var(--roxo);
+    box-shadow: none;
+  }
+}
+.fantasma {
+  opacity: 0.35;
+  border: 2px dashed var(--verde);
+}
+.escolhido {
+  box-shadow: 0 0 24px rgb(157 77 255 / 0.45);
+}
+.item.editando {
+  border-color: var(--roxo);
+}
+.edicao {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.nome-edicao {
+  font-weight: 700;
+}
+.acoes-edicao {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.espaco {
+  flex: 1;
+}
+.perigo {
+  color: #ff7ab8;
 }
 .item {
   display: flex;
