@@ -15,7 +15,8 @@ watch(perfilAtual, (perfil) => {
 export async function entrar(senha) {
   if (MODO_DEMO) return demo.entrar(senha)
   const { error } = await supabase.auth.signInWithPassword({
-    email: import.meta.env.VITE_FAMILY_EMAIL,
+    // trim: ignora espaços ou tabulações coladas sem querer no Vercel / .env
+    email: (import.meta.env.VITE_FAMILY_EMAIL ?? '').trim(),
     password: senha,
   })
   if (error) throw error
