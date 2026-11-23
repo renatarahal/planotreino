@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import TreinoEditor from '../components/TreinoEditor.vue'
+import { agruparPorBloco } from '../lib/blocos'
 import {
   excluirTreino,
   finalizarTreino,
@@ -30,12 +31,64 @@ const treinoAba = computed(() => treinos.value.find((t) => t.id === abaId.value)
 const feitos = computed(() => treinoAba.value?.exercicios.filter((e) => e.feito).length ?? 0)
 const total = computed(() => treinoAba.value?.exercicios.length ?? 0)
 
+// Cronômetro: guarda no navegador a hora em que o treino começou. Por isso ele
+// continua contando se a página for recarregada ou a tela do celular apagar.
+const chaveInicio = (treinoId) => `planotreino:inicio:${treinoId}`
+const inicios = ref({}) // treinoId -> horário de início (ms)
+const agora = ref(Date.now())
+let relogio = null
+
+function lerInicio(treinoId) {
+  const valor = Number(localStorage.getItem(chaveInicio(treinoId)))
+  return Number.isFinite(valor) && valor > 0 ? valor : null
+}
+
+function gravarInicio(treinoId, inicio) {
+  if (inicio) localStorage.setItem(chaveInicio(treinoId), String(inicio))
+  else localStorage.removeItem(chaveInicio(treinoId))
+  inicios.value = { ...inicios.value, [treinoId]: inicio }
+}
+
+const inicioAba = computed(() => inicios.value[abaId.value] ?? null)
+const decorrido = computed(() => (inicioAba.value ? Math.max(0, agora.value - inicioAba.value) : 0))
+
+function iniciar() {
+  aviso.value = ''
+  agora.value = Date.now()
+  gravarInicio(treinoAba.value.id, agora.value)
+}
+
+function cancelarCronometro() {
+  if (confirm('Zerar o cronômetro? Os exercícios marcados continuam marcados.')) gravarInicio(treinoAba.value.id, null)
+}
+
+// 5:07 | 1:02:09
+function formatarRelogio(ms) {
+  const total = Math.floor(ms / 1000)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = String(total % 60).padStart(2, '0')
+  return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
+}
+
+// 45s | 32min 10s | 1h 05min
+function formatarDuracao(ms) {
+  const total = Math.round(ms / 1000)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  if (h) return `${h}h ${String(m).padStart(2, '0')}min`
+  if (m) return s ? `${m}min ${s}s` : `${m}min`
+  return `${s}s`
+}
+
 async function carregar() {
   carregando.value = true
   erro.value = ''
   try {
     const [lista, atual] = await Promise.all([listarTreinos(perfil.id), obterTreinoAtualId(perfil.id)])
-    treinos.value = lista
+    treinos.value = lista.map((t) => ({ ...t, exercicios: agruparPorBloco(t.exercicios) }))
+    inicios.value = Object.fromEntries(lista.map((t) => [t.id, lerInicio(t.id)]))
     atualIdSalvo.value = atual
     if (!treinos.value.some((t) => t.id === abaId.value)) abaId.value = atualId.value
   } catch {
@@ -65,6 +118,8 @@ async function finalizar() {
   if (feitos.value < total.value && !confirm(`Faltam ${total.value - feitos.value} exercício(s). Finalizar mesmo assim?`))
     return
   const proximo = proximoDe(treino.id)
+  const inicio = inicios.value[treino.id]
+  const duracao = inicio ? Date.now() - inicio : null
   try {
     await finalizarTreino(perfil.id, treino.id, proximo)
   } catch {
@@ -72,15 +127,16 @@ async function finalizar() {
     return
   }
   treino.exercicios.forEach((e) => (e.feito = false))
+  gravarInicio(treino.id, null)
   atualIdSalvo.value = proximo
   abaId.value = proximo
-  const nomeProximo = treinos.value.find((t) => t.id === proximo).nome
-  mostrarAviso(proximo === treino.id ? `🎉 ${treino.nome} finalizado!` : `🎉 ${treino.nome} finalizado! Próximo: ${nomeProximo}`)
-}
 
-function mostrarAviso(texto) {
-  aviso.value = texto
-  setTimeout(() => (aviso.value = ''), 4000)
+  const nomeProximo = treinos.value.find((t) => t.id === proximo).nome
+  const tempo = duracao != null ? ` em ${formatarDuracao(duracao)}` : ''
+  const seguinte = proximo === treino.id ? '' : ` Próximo: ${nomeProximo}.`
+  // Fica na tela até a pessoa fechar, para dar tempo de ver o tempo total.
+  aviso.value = `🎉 ${treino.nome} finalizado${tempo}!${seguinte}`
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 function novoTreino() {
@@ -124,6 +180,7 @@ async function excluir() {
     erro.value = 'Não foi possível excluir o treino.'
     return
   }
+  gravarInicio(id, null)
   editando.value = null
   abaId.value = null
   await carregar()
@@ -141,7 +198,11 @@ function linkSeguro(url) {
   return url && /^https?:\/\//i.test(url) ? url : null
 }
 
-onMounted(carregar)
+onMounted(() => {
+  carregar()
+  relogio = setInterval(() => (agora.value = Date.now()), 1000)
+})
+onUnmounted(() => clearInterval(relogio))
 </script>
 
 <template>
@@ -153,7 +214,10 @@ onMounted(carregar)
     </header>
 
     <p v-if="erro" class="erro">{{ erro }}</p>
-    <p v-if="aviso" class="aviso" role="status">{{ aviso }}</p>
+    <div v-if="aviso" class="aviso" role="status">
+      <span>{{ aviso }}</span>
+      <button class="fechar" aria-label="Fechar aviso" @click="aviso = ''">✕</button>
+    </div>
 
     <TreinoEditor
       v-if="editando"
@@ -199,9 +263,17 @@ onMounted(carregar)
 
           <p v-if="treinoAba.observacoes" class="obs-geral">{{ treinoAba.observacoes }}</p>
 
-          <div v-if="total" class="progresso">
-            <div class="barra"><div class="preenchido" :style="{ width: `${(feitos / total) * 100}%` }" /></div>
-            <span>{{ feitos }} de {{ total }}</span>
+          <button v-if="total && !inicioAba" class="iniciar" @click="iniciar">▶ Iniciar treino</button>
+
+          <div v-if="total" class="painel" :class="{ rodando: inicioAba }">
+            <div v-if="inicioAba" class="cronometro">
+              <span class="tempo" role="timer">⏱️ {{ formatarRelogio(decorrido) }}</span>
+              <button class="zerar" @click="cancelarCronometro">Zerar</button>
+            </div>
+            <div class="progresso">
+              <div class="barra"><div class="preenchido" :style="{ width: `${(feitos / total) * 100}%` }" /></div>
+              <span>{{ feitos }} de {{ total }}</span>
+            </div>
           </div>
 
           <p v-if="!total" class="vazio-texto">Sem exercícios. Clique em Editar para adicionar.</p>
@@ -272,13 +344,67 @@ onMounted(carregar)
   font-size: 0.9rem;
 }
 .aviso {
-  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   padding: 12px 16px;
   border-radius: 12px;
   background: rgb(43 255 136 / 0.12);
   border: 1px solid var(--verde);
   color: var(--verde);
   font-weight: 700;
+}
+.aviso span {
+  flex: 1;
+}
+.fechar {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: transparent;
+  color: var(--verde);
+}
+.iniciar {
+  align-self: stretch;
+  padding: 16px;
+  font-size: 1.15rem;
+}
+.painel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.painel.rodando {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  padding: 12px 16px;
+  border-radius: 16px;
+  background: rgb(20 20 31 / 0.92);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--verde);
+  box-shadow: 0 0 24px rgb(43 255 136 / 0.2);
+}
+.cronometro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tempo {
+  font-size: 1.8rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--verde);
+}
+.zerar {
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  background: transparent;
+  border: 1px solid var(--borda);
+  color: var(--texto-suave);
 }
 .vazio {
   text-align: center;

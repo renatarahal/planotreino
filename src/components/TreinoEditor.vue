@@ -2,6 +2,7 @@
 import { computed, ref, toRaw } from 'vue'
 import { CAMPOS_EXERCICIO } from '../api/treinos'
 import { novoId } from '../lib/uuid'
+import { agruparPorBloco } from '../lib/blocos'
 
 const props = defineProps({
   treino: { type: Object, required: true },
@@ -71,11 +72,13 @@ function salvar() {
     nome: t.nome.trim(),
     foco: limpar(t.foco),
     observacoes: limpar(t.observacoes),
-    exercicios: t.exercicios.map((ex) => ({
-      id: ex.id,
-      feito: ex.feito,
-      ...Object.fromEntries(CAMPOS_EXERCICIO.map((c) => [c, limpar(ex[c])])),
-    })),
+    exercicios: agruparPorBloco(
+      t.exercicios.map((ex) => ({
+        id: ex.id,
+        feito: ex.feito,
+        ...Object.fromEntries(CAMPOS_EXERCICIO.map((c) => [c, limpar(ex[c])])),
+      })),
+    ),
   }
 
   if (!treino.nome) return (erro.value = 'Dê um nome ao treino (ex.: Treino A).')
@@ -164,6 +167,7 @@ function excluir() {
     </ol>
 
     <button type="button" class="secundario adicionar" @click="adicionarExercicio">+ Adicionar exercício</button>
+    <p v-if="blocos.length > 1" class="dica">Ao salvar, cada exercício vai para o fim do bloco escolhido.</p>
 
     <p v-if="erro" class="erro">{{ erro }}</p>
 
@@ -279,9 +283,13 @@ textarea {
   border-color: var(--roxo);
   color: var(--roxo);
 }
-.vazio {
+.vazio,
+.dica {
   margin: 0;
   color: var(--texto-suave);
+}
+.dica {
+  font-size: 0.85rem;
 }
 .acoes {
   display: flex;
