@@ -88,9 +88,17 @@ export async function marcarExercicio(exercicioId, feito) {
   checar(await supabase.from('exercicios').update({ feito }).eq('id', exercicioId))
 }
 
-// Desmarca todos os exercícios do treino e define o próximo como "o da vez".
-export async function finalizarTreino(perfilId, treinoId, proximoId) {
-  if (MODO_DEMO) return demo.finalizarTreino(perfilId, treinoId, proximoId)
-  checar(await supabase.from('exercicios').update({ feito: false }).eq('treino_id', treinoId))
-  checar(await supabase.from('perfis').update({ treino_atual_id: proximoId }).eq('id', perfilId))
+// Grava o treino no histórico, desmarca os exercícios e define o próximo como
+// "o da vez". No Supabase isso roda numa função só: ou tudo dá certo, ou nada muda.
+// duracaoSegundos e iniciadoEm ficam null se o cronômetro não foi usado.
+export async function finalizarTreino(perfilId, treinoId, proximoId, { duracaoSegundos = null, iniciadoEm = null } = {}) {
+  if (MODO_DEMO) return demo.finalizarTreino(perfilId, treinoId, proximoId, { duracaoSegundos, iniciadoEm })
+  checar(
+    await supabase.rpc('finalizar_treino', {
+      p_treino: treinoId,
+      p_proximo: proximoId,
+      p_duracao_segundos: duracaoSegundos,
+      p_iniciado_em: iniciadoEm,
+    }),
+  )
 }

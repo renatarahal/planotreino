@@ -90,3 +90,96 @@ on public.exercicios for all
 to authenticated
 using (true)
 with check (true);
+
+-- ---------------------------------------------------------------------------
+-- Histórico: um registro por treino finalizado
+-- ---------------------------------------------------------------------------
+-- Guarda uma cópia dos exercícios do dia, para o histórico continuar certo
+-- mesmo se o treino for editado ou apagado depois.
+create table if not exists public.historico (
+  id uuid primary key default gen_random_uuid(),
+  perfil_id uuid not null references public.perfis(id) on delete cascade,
+  treino_id uuid references public.treinos(id) on delete set null,
+  treino_nome text not null check (char_length(treino_nome) between 1 and 40),
+  iniciado_em timestamptz,
+  finalizado_em timestamptz not null default now(),
+  duracao_segundos int check (duracao_segundos between 0 and 86400),
+  exercicios_feitos int not null default 0 check (exercicios_feitos >= 0),
+  exercicios_total int not null default 0 check (exercicios_total >= 0),
+  exercicios jsonb not null default '[]'::jsonb  -- [{ nome, bloco, series, repeticoes, carga, feito }]
+);
+
+create index if not exists historico_perfil_idx on public.historico (perfil_id, finalizado_em desc);
+
+alter table public.historico enable row level security;
+
+grant select, insert, delete on public.historico to authenticated;
+
+drop policy if exists "familia acessa historico" on public.historico;
+create policy "familia acessa historico"
+on public.historico for all
+to authenticated
+using (true)
+with check (true);
+
+-- Finaliza um treino de uma vez só: grava no histórico, desmarca os
+-- checkboxes e define o próximo treino "da vez". Se uma parte falhar, nada
+-- é gravado. Roda com as permissões de quem chamou (security invoker).
+create or replace function public.finalizar_treino(
+  p_treino uuid,
+  p_proximo uuid,
+  p_duracao_segundos int default null,
+  p_iniciado_em timestamptz default null
+)
+returns uuid
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+declare
+  v_perfil uuid;
+  v_nome text;
+  v_registro uuid;
+begin
+  select perfil_id, nome into v_perfil, v_nome from public.treinos where id = p_treino;
+  if v_perfil is null then
+    raise exception 'Treino não encontrado';
+  end if;
+  if p_proximo is not null
+     and not exists (select 1 from public.treinos where id = p_proximo and perfil_id = v_perfil) then
+    raise exception 'O próximo treino precisa ser do mesmo perfil';
+  end if;
+
+  insert into public.historico
+    (perfil_id, treino_id, treino_nome, iniciado_em, duracao_segundos, exercicios_feitos, exercicios_total, exercicios)
+  select
+    v_perfil,
+    p_treino,
+    v_nome,
+    p_iniciado_em,
+    -- Cronômetro esquecido ligado por mais de 24h: guarda sem duração.
+    case when p_duracao_segundos between 0 and 86400 then p_duracao_segundos end,
+    count(*) filter (where e.feito),
+    count(e.id),
+    coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'nome', e.nome, 'bloco', e.bloco, 'series', e.series,
+          'repeticoes', e.repeticoes, 'carga', e.carga, 'feito', e.feito
+        ) order by e.ordem
+      ) filter (where e.id is not null),
+      '[]'::jsonb
+    )
+  from (select 1) as um
+  left join public.exercicios e on e.treino_id = p_treino
+  returning id into v_registro;
+
+  update public.exercicios set feito = false where treino_id = p_treino and feito;
+  update public.perfis set treino_atual_id = coalesce(p_proximo, p_treino) where id = v_perfil;
+
+  return v_registro;
+end;
+$$;
+
+revoke execute on function public.finalizar_treino(uuid, uuid, int, timestamptz) from public, anon;
+grant execute on function public.finalizar_treino(uuid, uuid, int, timestamptz) to authenticated;

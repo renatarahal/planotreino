@@ -67,16 +67,45 @@ export const demo = {
     for (const t of treinos) for (const ex of t.exercicios) if (ex.id === exercicioId) ex.feito = feito
     gravarTreinos(treinos)
   },
-  finalizarTreino(perfilId, treinoId, proximoId) {
+  finalizarTreino(perfilId, treinoId, proximoId, { duracaoSegundos = null, iniciadoEm = null } = {}) {
     const treinos = lerTreinos()
-    for (const ex of treinos.find((t) => t.id === treinoId)?.exercicios ?? []) ex.feito = false
+    const treino = treinos.find((t) => t.id === treinoId)
+    const exercicios = treino?.exercicios ?? []
+    const registro = {
+      id: novoId(),
+      perfil_id: perfilId,
+      treino_nome: treino?.nome ?? 'Treino',
+      iniciado_em: iniciadoEm,
+      finalizado_em: new Date().toISOString(),
+      duracao_segundos: duracaoSegundos != null && duracaoSegundos <= 86400 ? duracaoSegundos : null,
+      exercicios_feitos: exercicios.filter((ex) => ex.feito).length,
+      exercicios_total: exercicios.length,
+      exercicios: exercicios.map(({ nome, bloco, series, repeticoes, carga, feito }) => ({
+        nome, bloco, series, repeticoes, carga, feito,
+      })),
+    }
+    localStorage.setItem(CHAVE_HISTORICO, JSON.stringify([registro, ...lerHistorico()]))
+    for (const ex of exercicios) ex.feito = false
     gravarTreinos(treinos)
     localStorage.setItem(CHAVE_ATUAIS, JSON.stringify({ ...lerAtuais(), [perfilId]: proximoId }))
+  },
+  listarHistorico(perfilId) {
+    return lerHistorico()
+      .filter((r) => r.perfil_id === perfilId)
+      .sort((a, b) => b.finalizado_em.localeCompare(a.finalizado_em))
+  },
+  excluirRegistro(registroId) {
+    localStorage.setItem(CHAVE_HISTORICO, JSON.stringify(lerHistorico().filter((r) => r.id !== registroId)))
   },
 }
 
 const CHAVE_TREINOS = 'planotreino:demo:treinos'
 const CHAVE_ATUAIS = 'planotreino:demo:atuais'
+const CHAVE_HISTORICO = 'planotreino:demo:historico'
+
+function lerHistorico() {
+  return JSON.parse(localStorage.getItem(CHAVE_HISTORICO) || '[]')
+}
 
 function lerTreinos() {
   return JSON.parse(localStorage.getItem(CHAVE_TREINOS) || '[]')

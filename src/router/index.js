@@ -12,6 +12,11 @@ const router = createRouter({
       component: () => import('../views/TreinosView.vue'),
       meta: { precisaPerfil: true },
     },
+    {
+      path: '/historico',
+      component: () => import('../views/HistoricoView.vue'),
+      meta: { precisaPerfil: true },
+    },
   ],
 })
 

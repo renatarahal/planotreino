@@ -6,6 +6,7 @@ import SugestoesExercicio from '../components/SugestoesExercicio.vue'
 import TreinoEditor from '../components/TreinoEditor.vue'
 import { agruparPorBloco, nomesDosBlocos } from '../lib/blocos'
 import { limparExercicio, validarExercicio } from '../lib/exercicio'
+import { formatarDuracao } from '../lib/tempo'
 import {
   excluirExercicio,
   excluirTreino,
@@ -77,16 +78,6 @@ function formatarRelogio(ms) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
 }
 
-// 45s | 32min 10s | 1h 05min
-function formatarDuracao(ms) {
-  const total = Math.round(ms / 1000)
-  const h = Math.floor(total / 3600)
-  const m = Math.floor((total % 3600) / 60)
-  const s = total % 60
-  if (h) return `${h}h ${String(m).padStart(2, '0')}min`
-  if (m) return s ? `${m}min ${s}s` : `${m}min`
-  return `${s}s`
-}
 
 async function carregar() {
   carregando.value = true
@@ -127,7 +118,10 @@ async function finalizar() {
   const inicio = inicios.value[treino.id]
   const duracao = inicio ? Date.now() - inicio : null
   try {
-    await finalizarTreino(perfil.id, treino.id, proximo)
+    await finalizarTreino(perfil.id, treino.id, proximo, {
+      duracaoSegundos: duracao != null ? Math.round(duracao / 1000) : null,
+      iniciadoEm: inicio ? new Date(inicio).toISOString() : null,
+    })
   } catch {
     erro.value = 'Não foi possível finalizar o treino.'
     return
@@ -324,7 +318,10 @@ onUnmounted(() => clearInterval(relogio))
     <header class="topo">
       <span class="mini-avatar" :style="{ background: perfil.cor }">{{ perfil.avatar }}</span>
       <h1>Treinos de {{ perfil.nome }}</h1>
-      <RouterLink to="/perfis" class="trocar">Trocar perfil</RouterLink>
+      <nav class="links">
+        <RouterLink to="/historico">📅 Histórico</RouterLink>
+        <RouterLink to="/perfis">Trocar perfil</RouterLink>
+      </nav>
     </header>
 
     <p v-if="erro" class="erro">{{ erro }}</p>
@@ -487,8 +484,11 @@ onUnmounted(() => clearInterval(relogio))
   font-size: 26px;
   box-shadow: 0 0 0 3px var(--preto), 0 0 0 5px var(--verde);
 }
-.trocar {
+.links {
+  display: flex;
+  gap: 16px;
   font-size: 0.9rem;
+  font-weight: 600;
 }
 .aviso {
   display: flex;
